@@ -17,6 +17,7 @@ import Glibc
 #endif
 
 internal import _FoundationCShims
+internal import OrderedCollections
 
 /// A marker protocol used to determine whether a value is a `String`-keyed `Dictionary`
 /// containing `Decodable` values (in which case it should be exempt from key conversion strategies).
@@ -28,6 +29,19 @@ private protocol _JSONStringDictionaryDecodableMarker {
 }
 
 extension Dictionary : _JSONStringDictionaryDecodableMarker where Key == String, Value: Decodable {
+    static var elementType: Decodable.Type { return Value.self }
+}
+
+/// A marker protocol used to determine whether a value is a `String`-keyed `OrderedDictionary`
+/// containing `Decodable` values (in which case it should be exempt from key conversion strategies).
+///
+/// The marker protocol also provides access to the type of the `Decodable` values,
+/// which is needed for the implementation of the key conversion strategy exemption.
+private protocol _JSONStringOrderedDictionaryDecodableMarker {
+    static var elementType: Decodable.Type { get }
+}
+
+extension OrderedDictionary : _JSONStringOrderedDictionaryDecodableMarker where Key == String, Value: Decodable {
     static var elementType: Decodable.Type { return Value.self }
 }
 
@@ -766,7 +780,7 @@ extension JSONDecoderImpl: Decoder {
     }
 
     private func unwrapDictionary<T: Decodable>(from mapValue: JSONMap.Value, as type: T.Type, for codingPathNode: _CodingPathNode, _ additionalKey: (some CodingKey)? = nil) throws -> T {
-        try checkNotNull(mapValue, expectedType: [String:Any].self, for: codingPathNode, additionalKey)
+        try checkNotNull(mapValue, expectedType: [String: Any].self, for: codingPathNode, additionalKey)
 
         guard let dictType = type as? (_JSONStringDictionaryDecodableMarker & Decodable).Type else {
             preconditionFailure("Must only be called if T implements __JSONStringDictionaryDecodableMarker")
@@ -780,6 +794,37 @@ extension JSONDecoderImpl: Decoder {
         }
 
         var result = [String: Any]()
+        result.reserveCapacity(region.count / 2)
+
+        let dictCodingPathNode = codingPathNode.appending(additionalKey)
+
+        var iter = jsonMap.makeObjectIterator(from: region.startOffset)
+        while let (keyValue, value) = iter.next() {
+            // We know these values are keys, but UTF-8 decoding could still fail.
+            let key = try self.unwrapString(from: keyValue, for: dictCodingPathNode, _CodingKey?.none)
+            let value = try self.unwrap(value, as: dictType.elementType, for: dictCodingPathNode, _CodingKey(stringValue: key)!)
+            result[key]._setIfNil(to: value)
+        }
+
+        return result as! T
+    }
+    
+
+    private func unwrapOrderedDictionary<T: Decodable>(from mapValue: JSONMap.Value, as type: T.Type, for codingPathNode: _CodingPathNode, _ additionalKey: (some CodingKey)? = nil) throws -> T {
+        try checkNotNull(mapValue, expectedType: OrderedDictionary<String, Any>.self, for: codingPathNode, additionalKey)
+
+        guard let dictType = type as? (_JSONStringDictionaryDecodableMarker & Decodable).Type else {
+            preconditionFailure("Must only be called if T implements __JSONStringDictionaryDecodableMarker")
+        }
+
+        guard case let .object(region) = mapValue else {
+            throw DecodingError.typeMismatch([String: Any].self, DecodingError.Context(
+                codingPath: codingPathNode.path(byAppending: additionalKey),
+                debugDescription: "Expected to decode \([String: Any].self) but found \(mapValue.debugDataTypeDescription) instead."
+            ))
+        }
+
+        var result = OrderedDictionary<String, Any>()
         result.reserveCapacity(region.count / 2)
 
         let dictCodingPathNode = codingPathNode.appending(additionalKey)
@@ -1192,10 +1237,10 @@ extension JSONDecoderImpl {
 
         let impl: JSONDecoderImpl
         let codingPathNode: _CodingPathNode
-        let dictionary: [String:JSONMap.Value]
+        let dictionary: OrderedDictionary<String, JSONMap.Value>
 
-        static func stringify(objectRegion: JSONMap.Region, using impl: JSONDecoderImpl, codingPathNode: _CodingPathNode, keyDecodingStrategy: JSONDecoder.KeyDecodingStrategy) throws -> [String:JSONMap.Value] {
-            var result = [String:JSONMap.Value]()
+        static func stringify(objectRegion: JSONMap.Region, using impl: JSONDecoderImpl, codingPathNode: _CodingPathNode, keyDecodingStrategy: JSONDecoder.KeyDecodingStrategy) throws -> OrderedDictionary<String, JSONMap.Value> {
+            var result = OrderedDictionary<String, JSONMap.Value>()
             result.reserveCapacity(objectRegion.count / 2)
 
             var iter = impl.jsonMap.makeObjectIterator(from: objectRegion.startOffset)

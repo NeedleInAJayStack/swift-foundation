@@ -29,6 +29,8 @@ import TestSupport
 @testable import Foundation
 #endif
 
+import OrderedCollections
+
 // MARK: - Test Suite
 
 final class JSONEncoderTests : XCTestCase {
@@ -538,6 +540,15 @@ final class JSONEncoderTests : XCTestCase {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let result = try! decoder.decode([String: String].self, from: input)
+
+        XCTAssertEqual(["leave_me_alone": "test"], result)
+    }
+    
+    func testDecodingOrderedDictionaryStringKeyConversionUntouched() {
+        let input = "{\"leave_me_alone\":\"test\"}".data(using: String._Encoding.utf8)!
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let result = try! decoder.decode(OrderedDictionary<String, String>.self, from: input)
 
         XCTAssertEqual(["leave_me_alone": "test"], result)
     }
